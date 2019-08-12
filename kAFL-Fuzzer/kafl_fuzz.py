@@ -19,11 +19,12 @@ You should have received a copy of the GNU General Public License
 along with QEMU-PT.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-import sys
+import sys, socket
 from common.self_check import self_check
 
 __author__ = 'sergej'
 
+socket.setdefaulttimeout(None)
 
 def main():
     f = open("help.txt")

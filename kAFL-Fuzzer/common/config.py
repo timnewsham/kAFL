@@ -173,6 +173,7 @@ class InfoConfiguration:
                             default=False)
         parser.add_argument('-S', required=False, metavar='Snapshot', help='specifiy snapshot title (default: kafl).', default="kafl", type=str)
         parser.add_argument('-macOS', required=False, help='enable macOS Support (requires Apple OSK)', action='store_true', default=False)
+        parser.add_argument('-zircon', required=False, help='enable zircon support', action='store_true', default=False)
 
         self.argument_values = vars(parser.parse_args())
 
@@ -253,6 +254,7 @@ class FuzzerConfiguration:
         parser.add_argument('-D', required=False, help='skip deterministic stages (dumb mode).',action='store_false', default=True)
         parser.add_argument('-I', required=False, metavar='<Dict-File>', help='import dictionary to fuzz.', default=None, type=parse_is_file)
         parser.add_argument('-macOS', required=False, help='enable macOS Support (requires Apple OSK)', action='store_true', default=False)
+        parser.add_argument('-zircon', required=False, help='enable zircon support', action='store_true', default=False)
         parser.add_argument('-f', required=False, help='disable fancy UI', action='store_false', default=True)
         parser.add_argument('-n', required=False, help='disable filter sampling', action='store_false', default=True)
         parser.add_argument('-l', required=False, help='enable UI log output', action='store_true', default=False)

@@ -21,6 +21,7 @@ import mmap
 import os
 import sys
 import random
+import re
 import resource
 import select
 import socket
@@ -113,6 +114,11 @@ class qemu:
             self.cmd = self.cmd.replace("-net user -net nic", "-netdev user,id=hub0port0 -device e1000-82545em,netdev=hub0port0,id=mac_vnet0 -cpu Penryn,kvm=off,vendor=GenuineIntel -device isa-applesmc,osk=\"" + self.config.config_values["APPLE-SMC-OSK"].replace("\"", "") + "\" -machine pc-q35-2.4")
             if qid == 0:
                 self.cmd = self.cmd.replace("-machine pc-q35-2.4", "-machine pc-q35-2.4 -redir tcp:5901:0.0.0.0:5900 -redir tcp:10022:0.0.0.0:22")
+        elif self.config.argument_values["zircon"]:
+            self.cmd = re.sub("-hda [^ ]*", "", self.cmd)
+            self.cmd += "-machine q35 " \
+                        "-device isa-debug-exit,iobase=0xf4,iosize=0x04 " \
+                        "-cpu Haswell,+smap,-check,-fsgsbase"
         else:
             self.cmd += " -machine pc-i440fx-2.6 "
 
@@ -235,15 +241,16 @@ class qemu:
         self.tick_timeout_treshold = treshold
 
     def start(self, verbose=False):
+        serout = file("serout.txt", "a", 0)
         if verbose:
             self.process = subprocess.Popen(filter(None, self.cmd.split(" ")),
                                             stdin=None,
-                                            stdout=None,
+                                            stdout=serout, #None,
                                             stderr=None)
         else:
             self.process = subprocess.Popen(filter(None, self.cmd.split(" ")),
                                             stdin=subprocess.PIPE,
-                                            stdout=subprocess.PIPE,
+                                            stdout=serout, #subprocess.PIPE,
                                             stderr=subprocess.PIPE)
 
         self.stat_fd = open("/proc/" + str(self.process.pid) + "/stat")

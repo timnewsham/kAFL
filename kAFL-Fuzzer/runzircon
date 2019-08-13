@@ -1,6 +1,7 @@
 #!/bin/sh
 # run kafl fuzzer on zircon
 # requires a fucshia build with kafl patches and configured for kafl build
+#    https://fuchsia-review.googlesource.com/c/fuchsia/+/309954 
 
 FUCHSIA=/home/newsham/src/fuchsia/
 ZKAFL=$FUCHSIA/zircon/system/core/kafl

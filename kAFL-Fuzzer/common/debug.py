@@ -17,9 +17,11 @@ You should have received a copy of the GNU General Public License
 along with QEMU-PT.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+import os
 import sys
 from datetime import timedelta
 import time
+import traceback
 import collections
 from multiprocessing import Manager
 
@@ -49,6 +51,16 @@ def __init_logger():
     init_time = time.time()
     output_file = open("debug.log", 'w')
 
+def log_exception():
+    f = open("exception.log", "a")
+    print >>f, os.getpid(), time.ctime()
+    exc_type, exc_value, exc_traceback = sys.exc_info()
+    traceback.print_tb(exc_traceback, limit=1, file=f)
+    traceback.print_exception(exc_type, exc_value, exc_traceback,
+                              limit=2, file=f)
+    print >>f
+    f.close()
+
 def logger(msg):
     global logging_is_enabled, output_file, init_time, shared_list
 
@@ -57,10 +69,12 @@ def logger(msg):
             shared_list.pop(0)
         shared_list.append(msg.replace("\n", " "))
     except:
+        log_exception()
         pass
     if logging_is_enabled:
         if not output_file:
             __init_logger()
+        #output_file.write("%f " % time.time())
         output_file.write("[" + str(timedelta(seconds=time.time()-init_time)) + "] " + msg + "\n")
         output_file.flush()
 
@@ -69,6 +83,7 @@ def get_rbuf_content():
     try:
         return list(shared_list)
     except:
+        log_exception()
         return None
 
 def enable_logging():

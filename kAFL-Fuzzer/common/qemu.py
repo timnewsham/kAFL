@@ -25,13 +25,14 @@ import re
 import resource
 import select
 import socket
+import struct
 import subprocess
 import time
 from socket import error as socket_error
 import psutil
 import mmh3
 
-from common.debug import log_qemu
+from common.debug import log_qemu, log_exception
 from common.util import atomic_write
 
 from common.util import Singleton
@@ -54,12 +55,53 @@ class QemuLookupSet:
         self.timeout = manager.dict()
         self.kasan = manager.dict()
 
+class ControlSocketDebugger(object) :
+    """MITM the control socket for debugging"""
+    def log(self, msg, *args) :
+        s = "sock %r: %s" % (self.__hash__(), msg % args)
+        log_qemu(s, 0)
+    def __init__(self) :
+        self.sock = socket.socket(socket.AF_UNIX)
+        self.log("create")
+    def connect(self, fn) :
+        self.log("connect %s", fn)
+        try :
+            x = self.sock.connect(fn)
+            self.log("connected")
+            return x
+        except Exception,e :
+            self.log("connect error %r", e)
+            raise e
+    def recv(self, n) :
+        #self.log("recv want %d", n)
+        try :
+            x = self.sock.recv(n)
+            self.log("recv got %r", x)
+            return x
+        except Exception,e :
+            self.log("recv exception %r", e)
+            raise e
+    def send(self, x) :
+        self.log("sent %r", x)
+        try :
+            n = self.sock.send(x)
+            #self.log("sent %d", n)
+            return n
+        except Exception,e :
+            self.log("send exception %r", e)
+            raise e
+    def settimeout(self, *arg) :
+        return self.sock.settimeout(*arg)
+    def close(self, *arg) :
+        return self.sock.close(*arg)
+
 class qemu:
     SC_CLK_TCK = os.sysconf(os.sysconf_names['SC_CLK_TCK'])
 
     def __init__(self, qid, config):
 
         self.global_bitmap = None
+        self.global_bitmap_fd = None
 
         self.lookup = QemuLookupSet()
 
@@ -122,16 +164,8 @@ class qemu:
         else:
             self.cmd += " -machine pc-i440fx-2.6 "
 
-        self.kafl_shm_f = None
         self.kafl_shm   = None
-        self.fs_shm_f   = None
         self.fs_shm     = None
-
-        self.payload_shm_f   = None
-        self.payload_shm     = None
-
-        self.bitmap_shm_f   = None
-        self.bitmap_shm     = None
 
         self.e = select.epoll()
         self.crashed = False
@@ -152,7 +186,7 @@ class qemu:
 
 
     def __del__(self):
-
+        log_qemu("kill qemu pid %d" % self.process.pid, self.qemu_id)
         os.system("kill -9 " + str(self.process.pid))
 
         try:
@@ -160,7 +194,7 @@ class qemu:
                 try:
                     self.process.kill()
                 except:
-                    pass
+                    log_exception()
 
             if self.e:
                 if self.control_fileno:
@@ -171,43 +205,35 @@ class qemu:
             if self.control:
                 self.control.close()
         except OSError:
+            log_exception()
             pass
 
         try:
             self.kafl_shm.close()
         except:
+            log_exception()
             pass
 
         try:
             self.fs_shm.close() 
         except:
-            pass
-
-        try:
-            os.close(self.kafl_shm_f)
-        except:
-            pass
-
-        try:
-            os.close(self.fs_shm_f)
-        except:
+            log_exception()
             pass
 
         try:
             if self.stat_fd:
                 self.stat_fd.close()
         except:
+            log_exception()
             pass
 
-        try:
+        if self.global_bitmap is not None :
             self.global_bitmap.close()
-        except:
-            pass
+            self.global_bitmap = None
 
-        try:
+        if self.global_bitmap_fd is not None :
             os.close(self.global_bitmap_fd)
-        except:
-            pass
+            self.global_bitmap_fd = None
 
     def __get_pid_guest_ticks(self):
         if self.stat_fd:
@@ -234,6 +260,7 @@ class qemu:
                 shm.write(bytes)
 
         f.close()
+        shm.flush()
         shm.close()
         os.close(shm_fd)
 
@@ -258,6 +285,7 @@ class qemu:
         try:
             self.set_init_state()
         except:
+            log_exception()
             return False
         self.initial_mem_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         #time.sleep(1)
@@ -273,43 +301,50 @@ class qemu:
         self.kasan = False
         self.start_ticks = 0
         self.end_ticks = 0
+
+        # wait for initial hypercall_acquire from vm
         self.control.settimeout(10.0)
         v = self.control.recv(1)
         log_qemu("Initial stage 1 handshake ["+ str(v) + "] done...", self.qemu_id)
         self.__set_binary(self.binary_filename, self.config.argument_values['executable'], (16 << 20))
         if v != 'D':
-            self.control.send('R')
-            v = self.control.recv(1)
-            log_qemu("Initial stage 2 handshake ["+ str(v) + "] done...", self.qemu_id)
-        self.control.send('R')
+            raise Exception("this better not happen! v = %r" % v)
+            #self.control.send('R')
+            #v = self.control.recv(1)
+            #log_qemu("Initial stage 2 handshake ["+ str(v) + "] done...", self.qemu_id)
+
+        # now wait for the hypercall_next_payload from vm before continuing
         v = self.control.recv(1)
         log_qemu("Initial stage 3 handshake ["+ str(v) + "] done...", self.qemu_id)
         self.control.settimeout(5.0)
 
     def init(self):
         self.control = socket.socket(socket.AF_UNIX)
+        #self.control = ControlSocketDebugger()
         while True:
             try:
                 self.control.connect(self.control_filename)
-                #self.control.connect(self.control_filename)
                 break
             except socket_error:
-                pass
-                #time.sleep(0.01)
+                #log_exception()
+                time.sleep(0.01)
 
-        self.kafl_shm_f     = os.open(self.bitmap_filename, os.O_RDWR | os.O_SYNC | os.O_CREAT)
-        self.fs_shm_f       = os.open(self.payload_filename, os.O_RDWR | os.O_SYNC | os.O_CREAT)
+        kafl_shm_f     = os.open(self.bitmap_filename, os.O_RDWR | os.O_SYNC | os.O_CREAT)
+        fs_shm_f       = os.open(self.payload_filename, os.O_RDWR | os.O_SYNC | os.O_CREAT)
         #argv_fd             = os.open(self.argv_filename, os.O_RDWR | os.O_SYNC | os.O_CREAT)
-        os.ftruncate(self.kafl_shm_f, self.bitmap_size)
-        os.ftruncate(self.fs_shm_f, (128 << 10))
+        os.ftruncate(kafl_shm_f, self.bitmap_size)
+        os.ftruncate(fs_shm_f, (128 << 10))
         #os.ftruncate(argv_fd, (4 << 10))
 
-        self.kafl_shm       = mmap.mmap(self.kafl_shm_f, self.bitmap_size, mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
-        self.fs_shm         = mmap.mmap(self.fs_shm_f, (128 << 10),  mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
+        self.kafl_shm       = mmap.mmap(kafl_shm_f, self.bitmap_size, mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
+        self.fs_shm         = mmap.mmap(fs_shm_f, (128 << 10),  mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
+        os.close(kafl_shm_f) #XXX
+        os.close(fs_shm_f) #XXX
 
         return True
 
     def soft_reload(self):
+        log_qemu("soft reload", self.qemu_id)
         self.crashed = False
         self.timeout = False
         self.kasan = False
@@ -317,47 +352,58 @@ class qemu:
         self.end_ticks = 0
         self.control.settimeout(10.0)
 
+        # ask qemu to reload the VM and wait for acknowledgement
         self.control.send('L')
         while True:
-            if self.control.recv(1) == 'L':
+            ch = self.control.recv(1)
+            if ch == 'L' or ch == '' :
                 break
+
+        # wait for the initial handshake (acquire)
         v = self.control.recv(1)
         self.__set_binary(self.binary_filename, self.config.argument_values['executable'], (16 << 20))
         if v != 'D':
-            self.control.send('R')
-            v = self.control.recv(1)
-        self.control.send('R')
-        #v = self.control.recv(1)
+            raise Exception("this better not happen! v == %r" % v)
+            #self.control.send('R')
+            #v = self.control.recv(1)
+
+        # now wait for the hypercall_next_payload from vm before continuing
         v = self.control.recv(1)
         self.control.settimeout(5.0)
 
-    # Return Codes:
-    # 0 : OK
-    # 1 : Crash
-    # 2 : Timeout
-    # 3 : KASAN
+    # Return Codes: OK, CRASH, TIMEOUT, KASAN, EOF
     def check_recv(self, timeout_detection=True):
+        log_qemu("check recv", self.qemu_id)
         if timeout_detection:
             self.control.settimeout(1.25)
         try:
             result = self.control.recv(1)
-        except socket_error, e:
-            return 2
+        #except socket_error, e:
+        except socket.timeout, e:
+            return "EOF"
 
         if result == 'C':
-            return 1
+            return "CRASH"
         elif result == 'K':
-            return 3
+            return "KASAN"
         elif result == 'R':
-            return 0
+            return "OK"
             log_qemu("Finding...Type is ["+ result + "]", self.qemu_id)
-        return 2
+        elif result == '':
+            return "EOF"
+        log_qemu("unexpected value on controls ocket %r" % result)
+        raise Exception("unexpected value on control socket %r" % result)
+        #return 2
 
     def send_payload(self, timeout_detection=True):
+        """Send a test case to qemu, wait for a response, and read back the coverage map"""
+        log_qemu("send payload", self.qemu_id)
         self.start_ticks = self.__get_pid_guest_ticks()
         try:
+            # vm was waiting for next payload, unlock them now that its been provided
             self.control.send("R")
         except OSError:
+            log_exception()
             log_qemu("Failed to send payload...", self.qemu_id)
             return None
 
@@ -369,7 +415,7 @@ class qemu:
             counter = 0
             while True:
                 value = self.check_recv()
-                if value == 2:
+                if value == "TIMEOUT":
                     self.end_ticks = self.__get_pid_guest_ticks()
                     if (self.end_ticks-self.start_ticks) >= self.tick_timeout_treshold:
                         break
@@ -381,14 +427,19 @@ class qemu:
             self.end_ticks = self.__get_pid_guest_ticks()
         else:
             value = self.check_recv(timeout_detection=False)
-        if value == 1:
+        log_qemu("check_recv val %s" % value, self.qemu_id)
+        if value == "CRASH":
             self.crashed = True
             self.finalize_iteration()
-        elif value == 2:
+        elif value == "TIMEOUT":
             self.timeout = True
             self.finalize_iteration()
-        elif value == 3:
+        elif value == "KASAN":
             self.kasan = True
+            self.finalize_iteration()
+        elif value == "EOF":
+            log_qemu("QEMU control channel unexpectedly shut down!", self.qemu_id)
+            self.timeout = True # XXX was really qemu shutting down!
             self.finalize_iteration()
         self.kafl_shm.seek(0x0)
         return self.kafl_shm.read(self.bitmap_size)
@@ -408,12 +459,14 @@ class qemu:
         payload = shm.read(size)
         self.fs_shm.write(payload)
         self.fs_shm.write(''.join(chr(0x00) for x in range((64 << 10)-size)))
+        self.fs_shm.flush()
         return payload, size
 
     def copy_mapserver_payload(self, shm, num, size):
         self.fs_shm.seek(0)
         shm.seek(size * num)
         shm.write(self.fs_shm.read(size))
+        shm.flush()
 
     def open_global_bitmap(self):
         self.global_bitmap_fd = os.open(self.config.argument_values['work_dir'] + "/bitmap", os.O_RDWR | os.O_SYNC | os.O_CREAT)
@@ -434,6 +487,7 @@ class qemu:
                     self.fs_shm.seek(0)
                     self.fs_shm.write(payload)
                     self.fs_shm.write(''.join(chr(0x00) for x in range((64 << 10)-payload_size)))
+                    self.fs_shm.flush()
                     tmp_bitmap1 = self.send_payload(timeout_detection=False)
                     if (self.crashed or self.kasan or self.timeout):
                         break
@@ -443,6 +497,7 @@ class qemu:
                 self.fs_shm.seek(0)
                 self.fs_shm.write(payload)
                 self.fs_shm.write(''.join(chr(0x00) for x in range((64 << 10)-payload_size)))
+                self.fs_shm.flush()
                 tmp_bitmap2 = self.send_payload(timeout_detection=False)
                 if (self.crashed or self.kasan or self.timeout):
                     break
@@ -453,6 +508,7 @@ class qemu:
                 init = False
                 
         except:
+            log_exception()
             failed = True
 
         self.crashed = crashed or self.crashed
@@ -468,6 +524,7 @@ class qemu:
             else:
                 return bitmap            
         except:
+            log_exception()
             self.timeout = True
             return bitmap
 
@@ -491,6 +548,7 @@ class qemu:
                 if effector_mode:
                     shm.seek(size * num)
                     shm.write(bitmap)
+                    shm.flush()
                     return True
                 else:
                     shm.seek((size * num) + len(bitmap))
@@ -503,23 +561,23 @@ class qemu:
             bitmap = self.verifiy_input(payload, bitmap, payload_size)
             shm.seek(size * num)
             shm.write(bitmap)
+            shm.flush()
         self.lookup.non_finding[new_hash] = None
         return True
 
     def set_payload(self, payload):
+        #log_qemu("set payload", self.qemu_id)
         self.fs_shm.seek(0)
-        input_len = to_string_32(len(payload))
-        # Fixed
-        self.fs_shm.write_byte(input_len[3])
-        self.fs_shm.write_byte(input_len[2])
-        self.fs_shm.write_byte(input_len[1])
-        self.fs_shm.write_byte(input_len[0])
+        self.fs_shm.write(struct.pack('<I', len(payload)))
         self.fs_shm.write(payload)
+        self.fs_shm.flush()
+        #log_qemu("done set payload: %s" % payload[:16].encode('hex'), self.qemu_id)
 
     def finalize_iteration(self):
         try:
             self.control.send('F')
             self.control.recv(1)
         except:
+            log_exception()
             log_qemu("finalize_iteration failed...", self.qemu_id)
 

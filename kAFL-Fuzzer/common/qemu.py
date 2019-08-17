@@ -280,6 +280,7 @@ class qemu:
                                             stdout=serout, #subprocess.PIPE,
                                             stderr=subprocess.PIPE)
 
+        log_qemu("process pid %d" % self.process.pid, self.qemu_id)
         self.stat_fd = open("/proc/" + str(self.process.pid) + "/stat")
         self.init()
         try:
@@ -380,7 +381,9 @@ class qemu:
             result = self.control.recv(1)
         #except socket_error, e:
         except socket.timeout, e:
-            return "EOF"
+            log_exception()
+            raise Exception("XXX DEBUG TIMEOUT")
+            return "TIMEOUT"
 
         if result == 'C':
             return "CRASH"

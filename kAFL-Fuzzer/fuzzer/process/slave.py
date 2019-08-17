@@ -25,7 +25,7 @@ from fuzzer.communicator import send_msg, recv_msg
 from fuzzer.protocol import *
 from common.config import FuzzerConfiguration
 from common.qemu import qemu
-from common.debug import log_slave
+from common.debug import log_slave, log_exception
 __author__ = 'Sergej Schumilo'
 
 def slave_loader(comm, slave_id):
@@ -66,6 +66,7 @@ class SlaveProcess:
             self.q.soft_reload()
             self.soft_reload_counter += 1
         except:
+            log_exception()
             while True:
                 self.q.__del__()
                 self.q = qemu(self.slave_id, self.config)
@@ -107,6 +108,7 @@ class SlaveProcess:
                             performance = time.time() - start_time
                             break
                         except:
+                            log_exception()
                             if not self.__restart_vm():
                                 return
                             self.reloaded = True
@@ -140,6 +142,7 @@ class SlaveProcess:
                                 performance = time.time() - start_time
                                 break
                             except:
+                                log_exception()
                                 pass
                     if not self.q.timeout:
                         #false positiv timeout
@@ -204,6 +207,7 @@ class SlaveProcess:
                     bitmap = self.q.send_payload()
                     break
                 except:
+                    log_exception()
                     log_slave("Sampling fail...", self.slave_id)
                     if not self.__restart_vm():
                         return
@@ -229,6 +233,7 @@ class SlaveProcess:
                         sampling_ticks = self.q.end_ticks - self.q.start_ticks
 
                 except:
+                    log_exception()
                     log_slave("Sampling wtf??!", self.slave_id)
                     if not self.__restart_vm():
                         return
@@ -238,6 +243,7 @@ class SlaveProcess:
                     self.q.disable_sampling_mode()
                     break
                 except:
+                    log_exception()
                     if not self.__restart_vm():
                         return
 
@@ -274,6 +280,7 @@ class SlaveProcess:
                 bitmap = self.q.send_payload()
                 break
             except:
+                log_exception()
                 log_slave("__respond_bitmap_req failed...", self.slave_id)
                 self.__restart_vm()
         send_msg(KAFL_TAG_REQ_BITMAP, bitmap, self.comm.to_master_from_slave_queue, source=self.slave_id)

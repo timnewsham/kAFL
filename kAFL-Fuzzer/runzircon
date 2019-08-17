@@ -12,5 +12,7 @@ IP0="0xffffffff00100000-0xffffffff00255000"
 # we pass the panic addrs in with the program buf
 PANICADDRS=$ZKAFL/panicAddrs
 
+rm -f serout.txt debug.log exception.log
+
 python ./kafl_fuzz.py $ZKAFL/snapshot/ram.qcow2 $ZKAFL/snapshot $PANICADDRS 512 $ZKAFL/inputs $ZKAFL/work -ip0 $IP0 -v --Purge -zircon
 

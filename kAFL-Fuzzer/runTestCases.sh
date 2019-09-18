@@ -3,6 +3,8 @@
 # requires a fucshia build with kafl patches and configured for kafl build
 #    https://fuchsia-review.googlesource.com/c/fuchsia/+/309954 
 
+rm -f serout.txt debug.log exception.log
+
 FUCHSIA=/home/newsham/src/fuchsia/
 ZKAFL=$FUCHSIA/zircon/system/core/kafl
 
@@ -12,15 +14,5 @@ IP0="0xffffffff00100000-0xffffffff00255000"
 # we pass the panic addrs in with the program buf
 PANICADDRS=$ZKAFL/panicAddrs
 
-rm -f serout.txt debug.log exception.log
-
-#python ./kafl_fuzz.py $ZKAFL/snapshot/ram.qcow2 $ZKAFL/snapshot $PANICADDRS 512 $ZKAFL/inputs $ZKAFL/work -ip0 $IP0 -v --Purge -zircon
-python ./kafl_fuzz.py \
-    $ZKAFL/snapshot/ram.qcow2 \
-    $ZKAFL/snapshot \
-    $PANICADDRS \
-    512 \
-    $ZKAFL/inputs \
-    $ZKAFL/work \
-    -ip0 $IP0 -v -zircon -p 1
+python ./runTestCases.py $ZKAFL/snapshot/ram.qcow2 $ZKAFL/snapshot $PANICADDRS 512 $ZKAFL/inputs $ZKAFL/work -ip0 $IP0 -v --Purge -zircon -- "$@"
 

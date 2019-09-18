@@ -267,14 +267,15 @@ class qemu:
     def set_tick_timeout_treshold(self, treshold):
         self.tick_timeout_treshold = treshold
 
-    def start(self, verbose=False):
-        serout = file("serout.txt", "a", 0)
+    def start(self, verbose=False, serout=None):
         if verbose:
             self.process = subprocess.Popen(filter(None, self.cmd.split(" ")),
                                             stdin=None,
                                             stdout=serout, #None,
                                             stderr=None)
         else:
+            if serout is None :
+                serout = subprocess.PIPE
             self.process = subprocess.Popen(filter(None, self.cmd.split(" ")),
                                             stdin=subprocess.PIPE,
                                             stdout=serout, #subprocess.PIPE,
@@ -382,9 +383,10 @@ class qemu:
         #except socket_error, e:
         except socket.timeout, e:
             log_exception()
-            raise Exception("XXX DEBUG TIMEOUT")
+            #raise Exception("XXX DEBUG TIMEOUT")
             return "TIMEOUT"
 
+        log_qemu("check recv got %r" % result, self.qemu_id)
         if result == 'C':
             return "CRASH"
         elif result == 'K':
